@@ -70,6 +70,24 @@ function availableMonths() {
   return months.sort((a, b) => Number(a) - Number(b));
 }
 
+async function syncCurrentUser(profile) {
+  const body = {
+    userId: profile.userId,
+    displayName: profile.displayName,
+    lineName: profile.displayName
+  };
+
+  try {
+    const result = await apiGet('syncUser', body);
+    if (result.ok) return result;
+    if (!String(result.message || '').includes('未対応のGET action')) return result;
+  } catch (error) {
+    if (!String(error.message || '').includes('未対応のGET action')) throw error;
+  }
+
+  return apiPost('syncUser', body);
+}
+
 async function refresh() {
   const data = await apiGet('list', { userId: state.profile.userId });
   if (!data.ok) throw new Error(data.message || '予約一覧の取得に失敗しました。');
@@ -92,11 +110,7 @@ async function boot() {
     if (!profile) return;
     state.profile = profile;
 
-    const synced = await apiGet('syncUser', {
-      userId: profile.userId,
-      displayName: profile.displayName,
-      lineName: profile.displayName
-    });
+    const synced = await syncCurrentUser(profile);
     if (!synced.ok) throw new Error(synced.message || 'ユーザー同期に失敗しました。');
     state.user = synced.user;
 
