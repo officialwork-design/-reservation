@@ -1,6 +1,6 @@
 export const CONFIG = {
   LIFF_ID: '',
-  GAS_URL: '',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbwJ98cJAg-FVLcgmua1WOr-Apgfn4N9Q3sEXEuEARQZx46eRLyHR2cI1pJnG4DMy2c5/exec',
   REQUEST_TIMEOUT_MS: 20000
 };
 
