@@ -23,7 +23,6 @@ export async function renderAdmin(app, state, deps) {
   const {
     apiGet,
     apiPost,
-    refresh,
     setMode,
     formatTime = fallbackFormatTime,
     formatDateLabel = fallbackFormatDateLabel,
@@ -123,7 +122,7 @@ export async function renderAdmin(app, state, deps) {
       const res = await apiPost('createSlots', body);
       if (!res.ok) return alert(res.message || '枠作成に失敗しました。');
       alert(`作成:${res.createdCount} / スキップ:${res.skippedCount}`);
-      await refreshAdminAndUser();
+      await loadAdminData();
     };
 
     app.querySelectorAll('[data-save-user]').forEach((button) => {
@@ -166,7 +165,7 @@ export async function renderAdmin(app, state, deps) {
         const res = await apiPost('adminDeleteReservation', { adminUserId: state.profile.userId, row });
         if (!res.ok) return alert(res.message || '予約削除に失敗しました。');
         alert('予約を削除しました。');
-        await refreshAdminAndUser();
+        await loadAdminData();
       };
     });
 
@@ -177,13 +176,8 @@ export async function renderAdmin(app, state, deps) {
       const res = await apiPost('deleteSlots', { adminUserId: state.profile.userId, rows });
       if (!res.ok) return alert(res.message || '削除に失敗しました。');
       alert(`削除:${res.deletedRows.length} / 拒否:${res.rejectedRows.length}`);
-      await refreshAdminAndUser();
+      await loadAdminData();
     };
-  }
-
-  async function refreshAdminAndUser() {
-    await refresh();
-    setMode('admin');
   }
 
   function openReservationEditModal(item) {
@@ -210,7 +204,7 @@ export async function renderAdmin(app, state, deps) {
       if (!res.ok) return alert(res.message || '予約更新に失敗しました。');
       root.innerHTML = '';
       alert('予約を更新しました。');
-      await refreshAdminAndUser();
+      await loadAdminData();
     };
   }
 
