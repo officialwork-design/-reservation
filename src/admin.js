@@ -1,23 +1,52 @@
-function escapeHtml(value) {
+function fallbackEscapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (s) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
 }
 
+function fallbackFormatTime(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  const match = text.match(/^(\d{1,2})(?::(\d{1,2}))?/);
+  if (!match) return text;
+  return `${String(Number(match[1])).padStart(2, '0')}:${String(Number(match[2] ?? '0')).padStart(2, '0')}`;
+}
+
+function fallbackFormatDateLabel(value) {
+  const text = String(value ?? '').replace(/\//g, '-');
+  const match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!match) return text;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+  return `${Number(match[2])}/${Number(match[3])}(${weekdays[date.getDay()]})`;
+}
+
 export async function renderAdmin(app, state, deps) {
-  const { apiGet, apiPost, refresh, setMode } = deps;
+  const {
+    apiGet,
+    apiPost,
+    refresh,
+    setMode,
+    formatTime = fallbackFormatTime,
+    formatDateLabel = fallbackFormatDateLabel,
+    escapeHtml = fallbackEscapeHtml
+  } = deps;
 
   app.innerHTML = `
-    <header class="header">
+    <header class="app-hero admin-hero">
       <div>
-        <p class="eyebrow">Admin</p>
+        <p class="eyebrow">Admin Console</p>
         <h1>管理画面</h1>
-        <p class="muted">撮影予約の枠・ユーザー・予約状況を管理します。</p>
+        <p>枠作成・ユーザー管理・予約確認</p>
       </div>
-      <button class="secondary" id="back-to-user">予約画面</button>
+      <div class="hero-badge"><span>管理</span><small>admin</small></div>
     </header>
-    <div id="admin-root"><div class="boot">管理データを読み込んでいます...</div></div>
+    <nav class="top-tabs admin-tabs">
+      <button class="tab" data-admin-back>予約一覧</button>
+      <button class="tab active">管理</button>
+    </nav>
+    <div id="admin-root"><div class="boot"><div class="spinner"></div><strong>管理データを読み込んでいます</strong><span>予約・ユーザー情報を確認中です</span></div></div>
   `;
 
-  app.querySelector('#back-to-user').onclick = () => setMode('user');
+  app.querySelector('[data-admin-back]').onclick = () => setMode('reserve');
 
   try {
     const [summary, users, reservations] = await Promise.all([
@@ -45,7 +74,7 @@ export async function renderAdmin(app, state, deps) {
       </section>
 
       <section class="panel">
-        <h2>予約枠作成</h2>
+        <div class="admin-section-title"><h2>予約枠作成</h2><span class="admin-pill">Slot</span></div>
         <div class="form-grid">
           <label>日付<input id="slot-date" type="date"></label>
           <label>開始<input id="slot-start" type="time" value="13:00"></label>
@@ -56,17 +85,17 @@ export async function renderAdmin(app, state, deps) {
       </section>
 
       <section class="panel">
-        <h2>ユーザー管理</h2>
-        <div class="table-wrap"><table><thead><tr><th>LINE表示名</th><th>キャスト名</th><th>登録日時</th><th>操作</th></tr></thead><tbody>${users.map(renderUserRow).join('')}</tbody></table></div>
+        <div class="admin-section-title"><h2>ユーザー管理</h2><span class="admin-pill">${users.length}名</span></div>
+        <div class="admin-list">${users.length ? users.map(renderUserCard).join('') : '<div class="empty-card">登録ユーザーはまだいません。</div>'}</div>
       </section>
 
       <section class="panel">
-        <h2>予約済み一覧</h2>
-        <div class="table-wrap"><table><thead><tr><th>日付</th><th>時間</th><th>名前</th><th>備考</th><th>更新日時</th></tr></thead><tbody>${reservations.map(renderReservationRow).join('')}</tbody></table></div>
+        <div class="admin-section-title"><h2>予約済み一覧</h2><span class="admin-pill">${reservations.length}件</span></div>
+        <div class="admin-list">${reservations.length ? reservations.map(renderReservationCard).join('') : '<div class="empty-card">予約済み枠はまだありません。</div>'}</div>
       </section>
 
       <section class="panel">
-        <h2>空き枠削除</h2>
+        <div class="admin-section-title"><h2>空き枠削除</h2><span class="admin-pill">Delete</span></div>
         <p class="muted">空き枠のみ削除できます。予約済み枠はGAS側で拒否します。</p>
         <textarea id="delete-rows" placeholder="削除する行番号をカンマ区切りで入力 例: 10,11,12"></textarea>
         <button class="danger" id="delete-slots">空き枠削除</button>
@@ -109,12 +138,37 @@ export async function renderAdmin(app, state, deps) {
       setMode('admin');
     };
   }
-}
 
-function renderUserRow(user) {
-  return `<tr><td>${escapeHtml(user.displayName)}</td><td><input data-cast-input="${escapeHtml(user.userId)}" value="${escapeHtml(user.castName || '')}"></td><td>${escapeHtml(user.createdAt)}</td><td><button data-save-cast data-user-id="${escapeHtml(user.userId)}">保存</button></td></tr>`;
-}
+  function renderUserCard(user) {
+    const displayName = user.displayName || '表示名なし';
+    const castName = user.castName || '';
+    return `
+      <article class="admin-card">
+        <div class="admin-card-head">
+          <div>
+            <div class="admin-card-title">${escapeHtml(castName || displayName)}</div>
+            <div class="admin-card-meta">LINE表示名: ${escapeHtml(displayName)}</div>
+            <div class="admin-card-meta">登録: ${escapeHtml(user.createdAt || '-')}</div>
+          </div>
+          <span class="admin-pill">User</span>
+        </div>
+        <label>キャスト名<input data-cast-input="${escapeHtml(user.userId)}" value="${escapeHtml(castName)}" placeholder="キャスト名を入力"></label>
+        <div class="actions"><button data-save-cast data-user-id="${escapeHtml(user.userId)}">保存</button></div>
+      </article>`;
+  }
 
-function renderReservationRow(item) {
-  return `<tr><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.time)}</td><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.note)}</td><td>${escapeHtml(item.updatedAt)}</td></tr>`;
+  function renderReservationCard(item) {
+    return `
+      <article class="admin-card reservation-admin-card">
+        <div class="admin-card-head">
+          <div>
+            <div class="admin-card-title">${escapeHtml(item.name || '名前なし')}</div>
+            <div class="admin-card-meta">${escapeHtml(formatDateLabel(item.date))} ${escapeHtml(formatTime(item.time))}</div>
+            <div class="admin-card-meta">更新: ${escapeHtml(item.updatedAt || '-')}</div>
+          </div>
+          <span class="admin-pill">Reserved</span>
+        </div>
+        <p class="admin-note">${escapeHtml(item.note || '備考なし')}</p>
+      </article>`;
+  }
 }
