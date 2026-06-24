@@ -108,6 +108,97 @@ function deleteSlots_(body, requestId) {
   });
 }
 
+function adminUpdateUser_(body, requestId) {
+  const adminUserId = String(required_(body.adminUserId, 'adminUserId')).trim();
+  const userId = String(required_(body.userId, 'userId')).trim();
+  requireAdmin_(adminUserId);
+
+  const sheet = getSheet_(CONFIG.SHEETS.USERS);
+  const before = getUserById_(userId);
+  if (!before) throw new Error('対象ユーザーが見つかりません。');
+
+  const displayName = String(body.displayName || before.displayName || '').trim();
+  const castName = String(body.castName || '').trim();
+  const memo = String(body.memo || '').trim();
+
+  sheet.getRange(before.row, COL.USER.DISPLAY_NAME).setValue(displayName);
+  sheet.getRange(before.row, COL.USER.CAST_NAME).setValue(castName);
+  sheet.getRange(before.row, COL.USER.MEMO).setValue(memo);
+
+  const after = getUserById_(userId);
+  appendLog_({ action: 'adminUpdateUser', actorId: adminUserId, target: 'user:' + userId, before: before, after: after, result: 'success', requestId: requestId });
+  return ok_({ user: after });
+}
+
+function adminDeleteUser_(body, requestId) {
+  const adminUserId = String(required_(body.adminUserId, 'adminUserId')).trim();
+  const userId = String(required_(body.userId, 'userId')).trim();
+  requireAdmin_(adminUserId);
+
+  if (String(adminUserId) === String(userId)) throw new Error('自分自身のユーザー情報は削除できません。');
+
+  const user = getUserById_(userId);
+  if (!user) throw new Error('対象ユーザーが見つかりません。');
+
+  const reservationSheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
+  const lastReservationRow = reservationSheet.getLastRow();
+  if (lastReservationRow >= 2) {
+    const values = reservationSheet.getRange(2, 1, lastReservationRow - 1, 6).getValues();
+    const hasReservation = values.some(function(row) {
+      return String(row[COL.RESERVATION.USER_ID - 1]) === userId;
+    });
+    if (hasReservation) throw new Error('予約が残っているユーザーは削除できません。先に予約を削除してください。');
+  }
+
+  const userSheet = getSheet_(CONFIG.SHEETS.USERS);
+  userSheet.deleteRow(user.row);
+  appendLog_({ action: 'adminDeleteUser', actorId: adminUserId, target: 'user:' + userId, before: user, after: '', result: 'success', requestId: requestId });
+  return ok_({ deletedUserId: userId });
+}
+
+function adminUpdateReservation_(body, requestId) {
+  return withReservationLock_(function() {
+    const adminUserId = String(required_(body.adminUserId, 'adminUserId')).trim();
+    const row = Number(required_(body.row, 'row'));
+    requireAdmin_(adminUserId);
+
+    const sheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
+    const before = getReservationRow_(row);
+    if (!before.date || !before.time) throw new Error('対象予約枠が見つかりません。');
+    if (!isReserved_(before)) throw new Error('空き枠は予約編集できません。');
+
+    const name = String(body.name || '').trim();
+    const note = String(body.note || '').trim();
+    if (!name) throw new Error('名前は必須です。');
+
+    sheet.getRange(row, COL.RESERVATION.NAME).setValue(name);
+    sheet.getRange(row, COL.RESERVATION.NOTE).setValue(note);
+    sheet.getRange(row, COL.RESERVATION.UPDATED_AT).setValue(now_());
+
+    const after = getReservationRow_(row);
+    appendLog_({ action: 'adminUpdateReservation', actorId: adminUserId, target: 'row:' + row, before: before, after: after, result: 'success', requestId: requestId });
+    return ok_({ reservation: after });
+  });
+}
+
+function adminDeleteReservation_(body, requestId) {
+  return withReservationLock_(function() {
+    const adminUserId = String(required_(body.adminUserId, 'adminUserId')).trim();
+    const row = Number(required_(body.row, 'row'));
+    requireAdmin_(adminUserId);
+
+    const sheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
+    const before = getReservationRow_(row);
+    if (!before.date || !before.time) throw new Error('対象予約枠が見つかりません。');
+    if (!isReserved_(before)) throw new Error('この枠は既に空き枠です。');
+
+    sheet.getRange(row, COL.RESERVATION.NAME, 1, 4).clearContent();
+    const after = getReservationRow_(row);
+    appendLog_({ action: 'adminDeleteReservation', actorId: adminUserId, target: 'row:' + row, before: before, after: after, result: 'success', requestId: requestId });
+    return ok_({ reservation: after });
+  });
+}
+
 function getExistingSlotKeys_() {
   const sheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
   const lastRow = sheet.getLastRow();
