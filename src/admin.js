@@ -55,20 +55,13 @@ export async function renderAdmin(app, state, deps) {
 
   async function loadAdminData() {
     try {
-      const [summary, users, reservations] = await Promise.all([
-        apiGet('adminSummary', { userId: state.profile.userId }),
-        apiGet('adminUsers', { userId: state.profile.userId }),
-        apiGet('adminReservations', { userId: state.profile.userId })
-      ]);
-
-      if (!summary.ok) throw new Error(summary.message || 'サマリー取得に失敗しました。');
-      if (!users.ok) throw new Error(users.message || 'ユーザー取得に失敗しました。');
-      if (!reservations.ok) throw new Error(reservations.message || '予約一覧取得に失敗しました。');
+      const bundle = await apiGet('adminBundle', { userId: state.profile.userId });
+      if (!bundle.ok) throw new Error(bundle.message || '管理データ取得に失敗しました。');
 
       adminCache = {
-        summary: summary.summary,
-        users: users.users || [],
-        reservations: reservations.reservations || []
+        summary: bundle.summary,
+        users: bundle.users || [],
+        reservations: bundle.reservations || []
       };
       renderAdminContent();
     } catch (error) {
