@@ -48,6 +48,44 @@ function getAdminReservations_(adminUserId) {
   return ok_({ reservations: sortSlots_(reservations) });
 }
 
+function getAdminBundle_(adminUserId) {
+  requireAdmin_(adminUserId);
+
+  const reservationSheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
+  const lastRow = reservationSheet.getLastRow();
+  const reservations = [];
+  let totalCount = 0;
+  let reservedCount = 0;
+  let openCount = 0;
+
+  if (lastRow >= 2) {
+    const values = reservationSheet.getRange(2, 1, lastRow - 1, 6).getValues();
+    values.forEach(function(rowValues, index) {
+      const slot = reservationObject_(index + 2, rowValues);
+      if (!slot.date || !slot.time) return;
+      totalCount++;
+      if (isReserved_(slot)) {
+        reservedCount++;
+        reservations.push(slot);
+      } else {
+        openCount++;
+      }
+    });
+  }
+
+  const users = listUsers_();
+  return ok_({
+    summary: {
+      userCount: users.length,
+      reservedCount: reservedCount,
+      openCount: openCount,
+      totalCount: totalCount
+    },
+    users: users,
+    reservations: sortSlots_(reservations)
+  });
+}
+
 function createSlots_(body, requestId) {
   return withReservationLock_(function() {
     const adminUserId = String(required_(body.adminUserId, 'adminUserId')).trim();
