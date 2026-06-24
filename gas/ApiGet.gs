@@ -9,6 +9,13 @@ function handleGet_(e) {
     case 'profile':
       return getProfile_(params.userId);
 
+    case 'syncUser':
+      return syncUser_({
+        userId: params.userId,
+        displayName: params.displayName,
+        lineName: params.lineName || params.displayName
+      }, newRequestId_());
+
     case 'adminSummary':
       return getAdminSummary_(params.userId);
 
