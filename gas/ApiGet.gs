@@ -25,6 +25,9 @@ function handleGet_(e) {
     case 'adminReservations':
       return getAdminReservations_(params.userId);
 
+    case 'adminBundle':
+      return getAdminBundle_(params.userId);
+
     default:
       throw new Error('未対応のGET actionです: ' + action);
   }
