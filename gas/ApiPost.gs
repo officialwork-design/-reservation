@@ -25,6 +25,18 @@ function handlePost_(e) {
       case 'deleteSlots':
         return deleteSlots_(body, requestId);
 
+      case 'adminUpdateUser':
+        return adminUpdateUser_(body, requestId);
+
+      case 'adminDeleteUser':
+        return adminDeleteUser_(body, requestId);
+
+      case 'adminUpdateReservation':
+        return adminUpdateReservation_(body, requestId);
+
+      case 'adminDeleteReservation':
+        return adminDeleteReservation_(body, requestId);
+
       default:
         throw new Error('未対応のPOST actionです: ' + action);
     }
