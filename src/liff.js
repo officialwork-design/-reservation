@@ -26,6 +26,12 @@ export async function initializeLiff() {
   };
 }
 
+export function logoutLine() {
+  if (liff.isLoggedIn()) {
+    liff.logout();
+  }
+}
+
 export function isInClient() {
   return liff.isInClient();
 }
