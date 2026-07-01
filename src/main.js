@@ -1,11 +1,12 @@
 import './styles.css';
 import { validateConfig } from './config.js';
 import { apiGet, apiPost } from './api.js';
-import { initializeLiff } from './liff.js';
+import { initializeLiff, logoutLine } from './liff.js';
 import { renderAdmin } from './admin.js';
 
 const app = document.getElementById('app');
 const CURRENT_USER_STORAGE_KEY = 'steelReservation.currentUser';
+const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const state = {
   loading: false,
@@ -43,6 +44,37 @@ function saveCurrentUser(loginResult) {
   state.isAdmin = Boolean(currentUser.isAdmin || currentUser.role === 'admin');
   localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(currentUser));
   return currentUser;
+}
+
+function loadStoredCurrentUser() {
+  try {
+    const raw = localStorage.getItem(CURRENT_USER_STORAGE_KEY);
+    if (!raw) return null;
+    const user = JSON.parse(raw);
+    if (!user?.userId || !user?.savedAt) return null;
+    const age = Date.now() - new Date(user.savedAt).getTime();
+    if (!Number.isFinite(age) || age > SESSION_MAX_AGE_MS) {
+      clearCurrentUser();
+      return null;
+    }
+    return user;
+  } catch (_) {
+    clearCurrentUser();
+    return null;
+  }
+}
+
+function clearCurrentUser() {
+  localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
+  state.currentUser = null;
+  state.user = null;
+  state.isAdmin = false;
+}
+
+function logout() {
+  clearCurrentUser();
+  logoutLine();
+  location.reload();
 }
 
 function formatTime(value) {
@@ -122,6 +154,13 @@ async function boot() {
     const missing = validateConfig();
     if (missing.length) throw new Error(`${missing.join(', ')} が未設定です。src/config.js を更新してください。`);
 
+    const storedUser = loadStoredCurrentUser();
+    if (storedUser) {
+      state.currentUser = storedUser;
+      state.user = storedUser.user || null;
+      state.isAdmin = Boolean(storedUser.isAdmin || storedUser.role === 'admin');
+    }
+
     const profile = await initializeLiff();
     if (!profile) return;
     state.profile = profile;
@@ -144,6 +183,7 @@ function render() {
   app.innerHTML = `
     ${renderTop(displayName)}
     ${renderTabs()}
+    ${renderLinkedEventNotice()}
     ${state.mode === 'mine' ? renderMineView() : renderReserveView()}
     <div id="modal-root"></div>
   `;
@@ -172,7 +212,20 @@ function renderTabs() {
       <button class="tab ${state.mode === 'mine' ? 'active' : ''}" data-mode="mine">自分の予約</button>
       ${state.isAdmin ? `<button class="tab admin-tab ${state.mode === 'admin' ? 'active' : ''}" data-mode="admin">管理</button>` : ''}
     </nav>
+    <div class="login-strip">
+      <span>${escapeHtml(state.currentUser?.role || 'viewer')}</span>
+      <strong>${escapeHtml(state.currentUser?.displayName || displayName)}</strong>
+      <button class="secondary mini-button" data-action="logout">ログアウト</button>
+    </div>
   `;
+}
+
+function renderLinkedEventNotice() {
+  const linkedEventId = state.currentUser?.linkedEventId;
+  if (!linkedEventId) {
+    return '<div class="notice-card">イベント紐づきは未設定です。通常の撮影予約画面を表示しています。</div>';
+  }
+  return `<div class="notice-card success">紐づきイベント: <strong>${escapeHtml(linkedEventId)}</strong></div>`;
 }
 
 function renderReserveView() {
@@ -243,6 +296,7 @@ function bindCommonEvents() {
       render();
     });
   });
+  app.querySelector('[data-action="logout"]')?.addEventListener('click', logout);
 }
 
 function bindUserEvents() {
