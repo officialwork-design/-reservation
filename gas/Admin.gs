@@ -1,29 +1,6 @@
 function getAdminSummary_(adminUserId) {
   requireAdmin_(adminUserId);
-  const sheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
-  const lastRow = sheet.getLastRow();
-  let totalCount = 0;
-  let reservedCount = 0;
-  let openCount = 0;
-
-  if (lastRow >= 2) {
-    const values = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
-    values.forEach(function(rowValues, index) {
-      const slot = reservationObject_(index + 2, rowValues);
-      if (!slot.date || !slot.time) return;
-      totalCount++;
-      if (isReserved_(slot)) reservedCount++; else openCount++;
-    });
-  }
-
-  return ok_({
-    summary: {
-      userCount: listUsers_().length,
-      reservedCount: reservedCount,
-      openCount: openCount,
-      totalCount: totalCount
-    }
-  });
+  return ok_({ summary: buildAdminBundleData_(adminUserId, true).summary });
 }
 
 function getAdminUsers_(adminUserId) {
@@ -33,48 +10,37 @@ function getAdminUsers_(adminUserId) {
 
 function getAdminReservations_(adminUserId) {
   requireAdmin_(adminUserId);
-  const sheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
-  const lastRow = sheet.getLastRow();
-  const reservations = [];
-
-  if (lastRow >= 2) {
-    const values = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
-    values.forEach(function(rowValues, index) {
-      const slot = reservationObject_(index + 2, rowValues);
-      if (slot.date && slot.time && isReserved_(slot)) reservations.push(slot);
-    });
-  }
-
-  return ok_({ reservations: sortSlots_(reservations) });
+  const bundle = buildAdminBundleData_(adminUserId, true);
+  return ok_({ reservations: bundle.reservations, openSlots: bundle.openSlots });
 }
 
 function getAdminBundle_(adminUserId) {
   requireAdmin_(adminUserId);
+  return ok_(buildAdminBundleData_(adminUserId, true));
+}
 
-  const reservationSheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
-  const lastRow = reservationSheet.getLastRow();
+function buildAdminBundleData_(adminUserId, skipRequire) {
+  if (!skipRequire) requireAdmin_(adminUserId);
+  const slots = getReservationSnapshot_().slots;
   const reservations = [];
+  const openSlots = [];
   let totalCount = 0;
   let reservedCount = 0;
   let openCount = 0;
 
-  if (lastRow >= 2) {
-    const values = reservationSheet.getRange(2, 1, lastRow - 1, 6).getValues();
-    values.forEach(function(rowValues, index) {
-      const slot = reservationObject_(index + 2, rowValues);
-      if (!slot.date || !slot.time) return;
-      totalCount++;
-      if (isReserved_(slot)) {
-        reservedCount++;
-        reservations.push(slot);
-      } else {
-        openCount++;
-      }
-    });
-  }
+  slots.forEach(function(slot) {
+    totalCount++;
+    if (isReserved_(slot)) {
+      reservedCount++;
+      reservations.push(slot);
+    } else {
+      openCount++;
+      openSlots.push(slot);
+    }
+  });
 
   const users = listUsers_();
-  return ok_({
+  return {
     summary: {
       userCount: users.length,
       reservedCount: reservedCount,
@@ -82,8 +48,9 @@ function getAdminBundle_(adminUserId) {
       totalCount: totalCount
     },
     users: users,
-    reservations: sortSlots_(reservations)
-  });
+    reservations: sortSlots_(reservations),
+    openSlots: sortSlots_(openSlots)
+  };
 }
 
 function createSlots_(body, requestId) {
@@ -109,13 +76,21 @@ function createSlots_(body, requestId) {
         skipped.push(slot);
         return;
       }
-      sheet.appendRow([slot.date, slot.time, '', '', '', '']);
       created.push(slot);
       existingKeys[key] = true;
     });
 
+    if (created.length) {
+      const startRow = sheet.getLastRow() + 1;
+      const rows = created.map(function(slot) {
+        return [slot.date, slot.time, '', '', '', ''];
+      });
+      sheet.getRange(startRow, 1, rows.length, 6).setValues(rows);
+      clearReservationRelatedCache_();
+    }
+
     appendLog_({ action: 'createSlots', actorId: adminUserId, actorName: adminUserId, target: date, before: '', after: { created: created, skipped: skipped }, result: 'success', requestId: requestId });
-    return ok_({ createdCount: created.length, skippedCount: skipped.length, created: created, skipped: skipped });
+    return ok_(Object.assign({ createdCount: created.length, skippedCount: skipped.length, created: created, skipped: skipped }, buildAdminBundleData_(adminUserId, true)));
   });
 }
 
@@ -137,12 +112,16 @@ function deleteSlots_(body, requestId) {
         rejectedRows.push({ row: row, reason: 'reserved', slot: slot });
         return;
       }
-      sheet.deleteRow(row);
       deletedRows.push(row);
     });
 
+    if (deletedRows.length) {
+      deleteRowsInGroups_(sheet, deletedRows);
+      clearReservationRelatedCache_();
+    }
+
     appendLog_({ action: 'deleteSlots', actorId: adminUserId, actorName: adminUserId, target: 'rows:' + rows.join(','), before: rows, after: { deletedRows: deletedRows, rejectedRows: rejectedRows }, result: rejectedRows.length ? 'partial' : 'success', requestId: requestId });
-    return ok_({ deletedRows: deletedRows, rejectedRows: rejectedRows });
+    return ok_(Object.assign({ deletedRows: deletedRows, rejectedRows: rejectedRows }, buildAdminBundleData_(adminUserId, true)));
   });
 }
 
@@ -158,14 +137,29 @@ function adminUpdateUser_(body, requestId) {
   const displayName = String(body.displayName || before.displayName || '').trim();
   const castName = String(body.castName || '').trim();
   const memo = String(body.memo || '').trim();
+  const role = String(body.role || before.role || CONFIG.DEFAULT_ROLE).trim();
+  const linkedEventId = String(body.linkedEventId || '').trim();
+  if ([CONFIG.DEFAULT_ROLE, CONFIG.ADMIN_ROLE].indexOf(role) === -1) throw new Error('role が不正です。');
 
-  sheet.getRange(before.row, COL.USER.DISPLAY_NAME).setValue(displayName);
-  sheet.getRange(before.row, COL.USER.CAST_NAME).setValue(castName);
-  sheet.getRange(before.row, COL.USER.MEMO).setValue(memo);
+  const rowValues = [
+    before.userId,
+    displayName,
+    castName,
+    before.createdAt || now_(),
+    memo,
+    before.pictureUrl || '',
+    before.statusMessage || '',
+    role,
+    linkedEventId,
+    before.lastAccessAt || '',
+    before.isActive !== false
+  ];
+  sheet.getRange(before.row, 1, 1, COL.USER.IS_ACTIVE).setValues([rowValues]);
+  clearUserRelatedCache_();
 
-  const after = getUserById_(userId);
+  const after = userObject_(before.row, rowValues);
   appendLog_({ action: 'adminUpdateUser', actorId: adminUserId, target: 'user:' + userId, before: before, after: after, result: 'success', requestId: requestId });
-  return ok_({ user: after });
+  return ok_(Object.assign({ user: after }, buildAdminBundleData_(adminUserId, true)));
 }
 
 function adminDeleteUser_(body, requestId) {
@@ -178,20 +172,16 @@ function adminDeleteUser_(body, requestId) {
   const user = getUserById_(userId);
   if (!user) throw new Error('対象ユーザーが見つかりません。');
 
-  const reservationSheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
-  const lastReservationRow = reservationSheet.getLastRow();
-  if (lastReservationRow >= 2) {
-    const values = reservationSheet.getRange(2, 1, lastReservationRow - 1, 6).getValues();
-    const hasReservation = values.some(function(row) {
-      return String(row[COL.RESERVATION.USER_ID - 1]) === userId;
-    });
-    if (hasReservation) throw new Error('予約が残っているユーザーは削除できません。先に予約を削除してください。');
-  }
+  const hasReservation = getReservationSnapshot_().slots.some(function(slot) {
+    return String(slot.userId) === userId;
+  });
+  if (hasReservation) throw new Error('予約が残っているユーザーは削除できません。先に予約を削除してください。');
 
   const userSheet = getSheet_(CONFIG.SHEETS.USERS);
   userSheet.deleteRow(user.row);
+  clearUserRelatedCache_();
   appendLog_({ action: 'adminDeleteUser', actorId: adminUserId, target: 'user:' + userId, before: user, after: '', result: 'success', requestId: requestId });
-  return ok_({ deletedUserId: userId });
+  return ok_(Object.assign({ deletedUserId: userId }, buildAdminBundleData_(adminUserId, true)));
 }
 
 function adminUpdateReservation_(body, requestId) {
@@ -209,13 +199,12 @@ function adminUpdateReservation_(body, requestId) {
     const note = String(body.note || '').trim();
     if (!name) throw new Error('名前は必須です。');
 
-    sheet.getRange(row, COL.RESERVATION.NAME).setValue(name);
-    sheet.getRange(row, COL.RESERVATION.NOTE).setValue(note);
-    sheet.getRange(row, COL.RESERVATION.UPDATED_AT).setValue(now_());
+    sheet.getRange(row, COL.RESERVATION.NAME, 1, 4).setValues([[name, note, before.userId, now_()]]);
+    clearReservationRelatedCache_();
 
     const after = getReservationRow_(row);
     appendLog_({ action: 'adminUpdateReservation', actorId: adminUserId, target: 'row:' + row, before: before, after: after, result: 'success', requestId: requestId });
-    return ok_({ reservation: after });
+    return ok_(Object.assign({ reservation: after }, buildAdminBundleData_(adminUserId, true)));
   });
 }
 
@@ -231,24 +220,36 @@ function adminDeleteReservation_(body, requestId) {
     if (!isReserved_(before)) throw new Error('この枠は既に空き枠です。');
 
     sheet.getRange(row, COL.RESERVATION.NAME, 1, 4).clearContent();
+    clearReservationRelatedCache_();
     const after = getReservationRow_(row);
     appendLog_({ action: 'adminDeleteReservation', actorId: adminUserId, target: 'row:' + row, before: before, after: after, result: 'success', requestId: requestId });
-    return ok_({ reservation: after });
+    return ok_(Object.assign({ reservation: after }, buildAdminBundleData_(adminUserId, true)));
   });
 }
 
 function getExistingSlotKeys_() {
-  const sheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
-  const lastRow = sheet.getLastRow();
   const keys = {};
-  if (lastRow < 2) return keys;
-  const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
-  values.forEach(function(row) {
-    const date = normalizeDate_(row[0]);
-    const time = normalizeTime_(row[1]);
-    if (date && time) keys[date + ' ' + time] = true;
+  getReservationSnapshot_().slots.forEach(function(slot) {
+    if (slot.date && slot.time) keys[slot.date + ' ' + slot.time] = true;
   });
   return keys;
+}
+
+function deleteRowsInGroups_(sheet, rows) {
+  if (!rows.length) return;
+  const sorted = rows.slice().sort(function(a, b) { return b - a; });
+  let high = sorted[0];
+  let count = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === high - count) {
+      count++;
+      continue;
+    }
+    sheet.deleteRows(high - count + 1, count);
+    high = sorted[i];
+    count = 1;
+  }
+  sheet.deleteRows(high - count + 1, count);
 }
 
 function buildTimeSlots_(date, startTime, endTime, intervalMinutes) {

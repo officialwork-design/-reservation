@@ -3,6 +3,7 @@ function lineLogin_(body, requestId) {
   const displayName = String(body.displayName || body.lineName || '').trim();
   const pictureUrl = String(body.pictureUrl || '').trim();
   const statusMessage = String(body.statusMessage || '').trim();
+  const linkedEventId = String(body.linkedEventId || '').trim();
   if (!displayName) throw new Error('displayName は必須です。');
 
   const sheet = getSheet_(CONFIG.SHEETS.USERS);
@@ -26,21 +27,40 @@ function lineLogin_(body, requestId) {
         pictureUrl,
         statusMessage,
         before.role || CONFIG.DEFAULT_ROLE,
-        before.linkedEventId || '',
+        linkedEventId || before.linkedEventId || '',
         now,
         true
       ];
       sheet.getRange(row, 1, 1, width).setValues([rowValues]);
+      clearUserRelatedCache_();
       const after = userObject_(row, rowValues);
       appendLog_({ action: 'lineLogin', actorId: userId, actorName: after.displayName, target: 'user:' + userId, before: before, after: after, result: 'updated', requestId: requestId });
       return ok_({ success: true, user: after, userId: after.userId, displayName: after.displayName, role: after.role, linkedEventId: after.linkedEventId, isAdmin: isAdmin_(userId) || after.role === CONFIG.ADMIN_ROLE, message: 'LINEログインしました。' });
     }
   }
 
-  const rowValues = [userId, displayName, '', now, '', pictureUrl, statusMessage, CONFIG.DEFAULT_ROLE, '', now, true];
+  const rowValues = [userId, displayName, '', now, '', pictureUrl, statusMessage, CONFIG.DEFAULT_ROLE, linkedEventId, now, true];
   sheet.appendRow(rowValues);
+  clearUserRelatedCache_();
   const row = sheet.getLastRow();
   const user = userObject_(row, rowValues);
   appendLog_({ action: 'lineLogin', actorId: userId, actorName: displayName, target: 'user:' + userId, before: '', after: user, result: 'created', requestId: requestId });
   return ok_({ success: true, user: user, userId: user.userId, displayName: user.displayName, role: user.role, linkedEventId: user.linkedEventId, isAdmin: isAdmin_(userId) || user.role === CONFIG.ADMIN_ROLE, message: 'LINEログインしました。' });
+}
+
+function bootstrap_(body, requestId) {
+  const login = lineLogin_(body, requestId);
+  const view = buildReservationViewForUser_(login.userId);
+  const user = view.user || login.user;
+  return ok_(Object.assign({}, view, {
+    success: true,
+    login: login,
+    user: user,
+    userId: user.userId,
+    displayName: user.displayName,
+    role: user.role,
+    linkedEventId: user.linkedEventId || '',
+    isAdmin: Boolean(view.isAdmin || login.isAdmin),
+    sessionRefreshedAt: now_()
+  }));
 }

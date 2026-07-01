@@ -12,7 +12,7 @@ function appendLog_(params) {
     params.note || '',
     params.requestId || newRequestId_()
   ];
-  sheet.appendRow(row);
+  sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length).setValues([row]);
 }
 
 function stringifyForLog_(value) {

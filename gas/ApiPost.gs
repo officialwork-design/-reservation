@@ -4,6 +4,9 @@ function handlePost_(e) {
 
   return runWithLog_(action, body.userId || body.adminUserId || '', function(requestId) {
     switch (action) {
+      case 'bootstrap':
+        return bootstrap_(body, requestId);
+
       case 'lineLogin':
         return lineLogin_(body, requestId);
 

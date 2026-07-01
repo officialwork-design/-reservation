@@ -3,10 +3,17 @@ import { validateConfig } from './config.js';
 import { apiGet, apiPost } from './api.js';
 import { initializeLiff, logoutLine } from './liff.js';
 import { renderAdmin } from './admin.js';
+import {
+  SESSION_REFRESH_INTERVAL_MS,
+  buildAuthPayload,
+  clearStoredSession,
+  isAdminSession,
+  loadStoredSession,
+  saveSessionFromApi,
+  shouldRefreshSession
+} from './auth.js';
 
 const app = document.getElementById('app');
-const CURRENT_USER_STORAGE_KEY = 'steelReservation.currentUser';
-const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const state = {
   loading: false,
@@ -17,64 +24,19 @@ const state = {
   myReservations: [],
   isAdmin: false,
   mode: 'reserve',
-  monthFilter: 'all'
+  monthFilter: 'all',
+  refreshTimerId: null,
+  visibilityRefreshBound: false
 };
 
 function setLoading(flag) {
   state.loading = flag;
   document.body.classList.toggle('is-loading', flag);
+  app.setAttribute('aria-busy', String(flag));
 }
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (s) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
-}
-
-function saveCurrentUser(loginResult) {
-  const currentUser = {
-    userId: loginResult.userId || loginResult.user?.userId || '',
-    displayName: loginResult.displayName || loginResult.user?.displayName || '',
-    role: loginResult.role || loginResult.user?.role || 'viewer',
-    linkedEventId: loginResult.linkedEventId || loginResult.user?.linkedEventId || '',
-    isAdmin: Boolean(loginResult.isAdmin),
-    user: loginResult.user || null,
-    savedAt: new Date().toISOString()
-  };
-  state.currentUser = currentUser;
-  state.user = loginResult.user || state.user;
-  state.isAdmin = Boolean(currentUser.isAdmin || currentUser.role === 'admin');
-  localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(currentUser));
-  return currentUser;
-}
-
-function loadStoredCurrentUser() {
-  try {
-    const raw = localStorage.getItem(CURRENT_USER_STORAGE_KEY);
-    if (!raw) return null;
-    const user = JSON.parse(raw);
-    if (!user?.userId || !user?.savedAt) return null;
-    const age = Date.now() - new Date(user.savedAt).getTime();
-    if (!Number.isFinite(age) || age > SESSION_MAX_AGE_MS) {
-      clearCurrentUser();
-      return null;
-    }
-    return user;
-  } catch (_) {
-    clearCurrentUser();
-    return null;
-  }
-}
-
-function clearCurrentUser() {
-  localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
-  state.currentUser = null;
-  state.user = null;
-  state.isAdmin = false;
-}
-
-function logout() {
-  clearCurrentUser();
-  logoutLine();
-  location.reload();
 }
 
 function formatTime(value) {
@@ -111,6 +73,10 @@ function groupByDate(items) {
   }, {});
 }
 
+function normalizeSlots(items = []) {
+  return items.map((slot) => ({ ...slot, time: formatTime(slot.time) }));
+}
+
 function filteredSlots() {
   if (state.monthFilter === 'all') return state.slots;
   return state.slots.filter((slot) => monthKey(slot.date) === state.monthFilter);
@@ -121,54 +87,92 @@ function availableMonths() {
   return months.sort((a, b) => Number(a) - Number(b));
 }
 
-async function loginWithLineProfile(profile) {
-  const result = await apiPost('lineLogin', {
-    action: 'lineLogin',
-    userId: profile.userId,
-    displayName: profile.displayName,
-    pictureUrl: profile.pictureUrl || '',
-    statusMessage: profile.statusMessage || ''
-  });
+function activeUserId() {
+  return state.currentUser?.userId || state.profile?.userId || '';
+}
 
+function applySession(session) {
+  state.currentUser = session;
+  state.user = session?.user || state.user;
+  state.isAdmin = isAdminSession(session);
+}
+
+function applyReservationPayload(data) {
+  state.slots = normalizeSlots(data.openSlots || data.availableSlots || []);
+  state.myReservations = normalizeSlots(data.myReservations || []);
+  state.user = data.user || state.user;
+  state.isAdmin = Boolean(data.isAdmin || isAdminSession(state.currentUser));
+  const months = availableMonths();
+  if (state.monthFilter !== 'all' && !months.includes(state.monthFilter)) state.monthFilter = 'all';
+}
+
+function hasReservationPayload(data) {
+  return Array.isArray(data?.openSlots) || Array.isArray(data?.availableSlots) || Array.isArray(data?.myReservations);
+}
+
+async function bootstrapWithProfile(profile, options = {}) {
+  const result = await apiPost('bootstrap', buildAuthPayload(profile, state.currentUser));
   if (!result.ok && !result.success) throw new Error(result.message || 'LINEログインに失敗しました。');
-  saveCurrentUser(result);
+  const session = saveSessionFromApi(result, state.currentUser);
+  applySession(session);
+  applyReservationPayload(result);
+  scheduleSessionRefresh();
+  if (options.render !== false) render();
   return result;
 }
 
-async function refresh() {
-  const userId = state.currentUser?.userId || state.profile?.userId;
-  const data = await apiGet('list', { userId });
+async function refresh(options = {}) {
+  const userId = activeUserId();
+  if (!userId) throw new Error('ログインユーザーIDが取得できません。再ログインしてください。');
+  const data = await apiGet('list', {
+    userId,
+    linkedEventId: state.currentUser?.linkedEventId || ''
+  });
   if (!data.ok) throw new Error(data.message || '予約一覧の取得に失敗しました。');
-  state.slots = (data.openSlots || data.availableSlots || []).map((slot) => ({ ...slot, time: formatTime(slot.time) }));
-  state.myReservations = (data.myReservations || []).map((slot) => ({ ...slot, time: formatTime(slot.time) }));
-  state.user = data.user || state.user;
-  state.isAdmin = Boolean(data.isAdmin || state.currentUser?.isAdmin || state.currentUser?.role === 'admin');
-  const months = availableMonths();
-  if (state.monthFilter !== 'all' && !months.includes(state.monthFilter)) state.monthFilter = 'all';
-  render();
+  applyReservationPayload(data);
+  if (options.render !== false) render();
+  return data;
+}
+
+async function refreshSessionIfNeeded(force = false) {
+  if (!state.profile || !state.currentUser) return;
+  if (!force && !shouldRefreshSession(state.currentUser)) return;
+  try {
+    await bootstrapWithProfile(state.profile, { render: false });
+    if (state.mode !== 'admin') render();
+  } catch (_) {
+    clearStoredSession();
+  }
+}
+
+function scheduleSessionRefresh() {
+  if (state.refreshTimerId) window.clearInterval(state.refreshTimerId);
+  state.refreshTimerId = window.setInterval(() => refreshSessionIfNeeded(), SESSION_REFRESH_INTERVAL_MS);
+
+  if (!state.visibilityRefreshBound) {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshSessionIfNeeded();
+    });
+    state.visibilityRefreshBound = true;
+  }
 }
 
 async function boot() {
   try {
-    app.innerHTML = '<div class="boot"><div class="spinner"></div><strong>LINEログインを確認しています</strong><span>Chrome / Safari からLINE認証を行います</span></div>';
+    app.innerHTML = renderBootSkeleton('LINEログインを確認しています');
     const missing = validateConfig();
     if (missing.length) throw new Error(`${missing.join(', ')} が未設定です。src/config.js を更新してください。`);
 
-    const storedUser = loadStoredCurrentUser();
-    if (storedUser) {
-      state.currentUser = storedUser;
-      state.user = storedUser.user || null;
-      state.isAdmin = Boolean(storedUser.isAdmin || storedUser.role === 'admin');
-    }
+    const storedSession = loadStoredSession();
+    if (storedSession) applySession(storedSession);
 
     const profile = await initializeLiff();
     if (!profile) return;
     state.profile = profile;
 
-    await loginWithLineProfile(profile);
-    await refresh();
+    await bootstrapWithProfile(profile);
   } catch (error) {
-    app.innerHTML = `<div class="error"><h1>読み込みエラー</h1><p>${escapeHtml(error.message)}</p><button onclick="location.reload()">再読み込み</button></div>`;
+    renderError(error.message);
   }
 }
 
@@ -182,7 +186,7 @@ function render() {
 
   app.innerHTML = `
     ${renderTop(displayName)}
-    ${renderTabs()}
+    ${renderTabs(displayName)}
     ${renderLinkedEventNotice()}
     ${state.mode === 'mine' ? renderMineView() : renderReserveView()}
     <div id="modal-root"></div>
@@ -192,20 +196,59 @@ function render() {
   bindUserEvents();
 }
 
+function renderBootSkeleton(label) {
+  return `
+    <div class="app-skeleton">
+      <div class="skeleton-hero">
+        <div class="skeleton-line wide"></div>
+        <div class="skeleton-line medium"></div>
+      </div>
+      <div class="skeleton-tabs">
+        <div></div><div></div>
+      </div>
+      <div class="skeleton-grid">
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+        <div class="skeleton-card"></div>
+      </div>
+      <p class="loading-label">${escapeHtml(label)}</p>
+    </div>
+  `;
+}
+
+function renderError(message) {
+  app.innerHTML = `
+    <div class="error">
+      <h1>読み込みエラー</h1>
+      <p>${escapeHtml(message)}</p>
+      <button onclick="location.reload()">再読み込み</button>
+    </div>`;
+}
+
 function renderTop(displayName) {
+  const avatar = state.profile?.pictureUrl
+    ? `<img class="avatar" src="${escapeHtml(state.profile.pictureUrl)}" alt="">`
+    : `<div class="avatar avatar-fallback">${escapeHtml(displayName.slice(0, 1))}</div>`;
   return `
     <header class="app-hero">
-      <div>
-        <p class="eyebrow">Steel Reservation</p>
-        <h1>撮影予約</h1>
-        <p>${escapeHtml(displayName)} さん</p>
+      <div class="hero-main">
+        ${avatar}
+        <div>
+          <p class="eyebrow">Steel Reservation</p>
+          <h1>撮影予約</h1>
+          <p>${escapeHtml(displayName)} さん</p>
+        </div>
       </div>
-      <div class="hero-badge"><span>${state.slots.length}</span><small>空き枠</small></div>
+      <div class="hero-meta">
+        <div><span>${state.slots.length}</span><small>空き枠</small></div>
+        <div><span>${state.myReservations.length}</span><small>予約</small></div>
+      </div>
     </header>
   `;
 }
 
-function renderTabs() {
+function renderTabs(displayName) {
   return `
     <nav class="top-tabs">
       <button class="tab ${state.mode === 'reserve' ? 'active' : ''}" data-mode="reserve">予約一覧</button>
@@ -275,7 +318,10 @@ function renderMyReservation(slot) {
         <strong>${escapeHtml(formatTime(slot.time))}</strong>
         <p>${escapeHtml(slot.note || '備考なし')}</p>
       </div>
-      <div class="actions"><button data-action="change" data-row="${slot.row}">変更</button><button class="danger" data-action="cancel" data-row="${slot.row}">キャンセル</button></div>
+      <div class="actions">
+        <button data-action="change" data-row="${slot.row}">変更</button>
+        <button class="danger" data-action="cancel" data-row="${slot.row}">キャンセル</button>
+      </div>
     </article>`;
 }
 
@@ -318,7 +364,10 @@ function openReserveModal(row, date, time) {
         <h2>予約する</h2>
         <p class="modal-date">${escapeHtml(formatDateLabel(date))} ${escapeHtml(formatTime(time))}</p>
         <textarea id="note" placeholder="備考があれば入力"></textarea>
-        <div class="actions"><button data-modal="close" class="secondary">閉じる</button><button data-modal="submit">予約する</button></div>
+        <div class="actions modal-actions">
+          <button data-modal="close" class="secondary">閉じる</button>
+          <button data-modal="submit">予約する</button>
+        </div>
       </div>
     </div>`;
   root.querySelector('[data-modal="close"]').onclick = () => root.innerHTML = '';
@@ -326,31 +375,56 @@ function openReserveModal(row, date, time) {
     await runLocked(async () => {
       const note = root.querySelector('#note').value.trim();
       const name = state.user?.castName || state.currentUser?.displayName || state.profile.displayName;
-      const res = await apiPost('reserve', { row, userId: state.currentUser?.userId || state.profile.userId, name, note });
+      const res = await apiPost('reserve', {
+        row,
+        userId: activeUserId(),
+        linkedEventId: state.currentUser?.linkedEventId || '',
+        name,
+        note
+      });
       if (!res.ok) throw new Error(res.message || '予約に失敗しました。');
       root.innerHTML = '';
       state.mode = 'mine';
-      await refresh();
+      await applyActionResponse(res);
     });
   };
 }
 
 function openChangeModal(row) {
   const root = document.getElementById('modal-root');
+  const current = state.myReservations.find((reservation) => Number(reservation.row) === row);
   root.innerHTML = `
-    <div class="modal-backdrop"><div class="modal"><h2>予約変更</h2>
-    <label>変更先の空き枠</label><select id="targetRow"><option value="">備考のみ変更</option>${state.slots.map(s => `<option value="${s.row}">${escapeHtml(formatDateLabel(s.date))} ${escapeHtml(formatTime(s.time))}</option>`).join('')}</select>
-    <textarea id="note" placeholder="備考"></textarea>
-    <div class="actions"><button data-modal="close" class="secondary">閉じる</button><button data-modal="submit">変更する</button></div></div></div>`;
+    <div class="modal-backdrop">
+      <div class="modal">
+        <h2>予約変更</h2>
+        <label>変更先の空き枠</label>
+        <select id="targetRow">
+          <option value="">備考のみ変更</option>
+          ${state.slots.map((slot) => `<option value="${slot.row}">${escapeHtml(formatDateLabel(slot.date))} ${escapeHtml(formatTime(slot.time))}</option>`).join('')}
+        </select>
+        <textarea id="note" placeholder="備考">${escapeHtml(current?.note || '')}</textarea>
+        <div class="actions modal-actions">
+          <button data-modal="close" class="secondary">閉じる</button>
+          <button data-modal="submit">変更する</button>
+        </div>
+      </div>
+    </div>`;
   root.querySelector('[data-modal="close"]').onclick = () => root.innerHTML = '';
   root.querySelector('[data-modal="submit"]').onclick = async () => {
     await runLocked(async () => {
       const targetRowValue = root.querySelector('#targetRow').value;
       const note = root.querySelector('#note').value.trim();
-      const res = await apiPost('update', { row, targetRow: targetRowValue ? Number(targetRowValue) : row, userId: state.currentUser?.userId || state.profile.userId, note });
+      const res = await apiPost('update', {
+        row,
+        targetRow: targetRowValue ? Number(targetRowValue) : row,
+        userId: activeUserId(),
+        linkedEventId: state.currentUser?.linkedEventId || '',
+        note
+      });
       if (!res.ok) throw new Error(res.message || '変更に失敗しました。');
       root.innerHTML = '';
-      await refresh();
+      state.mode = 'mine';
+      await applyActionResponse(res);
     });
   };
 }
@@ -358,9 +432,47 @@ function openChangeModal(row) {
 async function cancelReservation(row) {
   if (!confirm('この予約をキャンセルします。よろしいですか？')) return;
   await runLocked(async () => {
-    const res = await apiPost('cancel', { row, userId: state.currentUser?.userId || state.profile.userId });
+    const res = await apiPost('cancel', {
+      row,
+      userId: activeUserId(),
+      linkedEventId: state.currentUser?.linkedEventId || ''
+    });
     if (!res.ok) throw new Error(res.message || 'キャンセルに失敗しました。');
-    await refresh();
+    state.mode = 'mine';
+    await applyActionResponse(res);
+  });
+}
+
+async function applyActionResponse(res) {
+  if (hasReservationPayload(res)) {
+    applyReservationPayload(res);
+    render();
+    return;
+  }
+  await refresh();
+}
+
+async function logout() {
+  if (state.refreshTimerId) window.clearInterval(state.refreshTimerId);
+  clearStoredSession();
+  state.currentUser = null;
+  state.user = null;
+  state.isAdmin = false;
+  logoutLine();
+  renderLogoutScreen();
+}
+
+function renderLogoutScreen() {
+  app.innerHTML = `
+    <div class="logout-screen">
+      <p class="eyebrow">Signed out</p>
+      <h1>ログアウトしました</h1>
+      <p>再度利用する場合はLINEログインを行ってください。</p>
+      <button data-action="login">再ログイン</button>
+    </div>
+  `;
+  app.querySelector('[data-action="login"]').addEventListener('click', () => {
+    location.href = location.origin + location.pathname;
   });
 }
 

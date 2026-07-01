@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "lint": "node scripts/lint.mjs",
+    "check": "npm run lint && npm run build",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },

@@ -3,9 +3,11 @@ let __sheetCache = {};
 
 const CACHE_KEYS = {
   USERS: 'steel_reservation_users_v1',
-  ADMINS: 'steel_reservation_admins_v1'
+  ADMINS: 'steel_reservation_admins_v1',
+  RESERVATIONS: 'steel_reservation_reservations_v1'
 };
 const CACHE_TTL_SECONDS = 120;
+const RESERVATION_CACHE_TTL_SECONDS = 45;
 
 function getSpreadsheet_() {
   if (!__spreadsheetCache) {
@@ -44,17 +46,42 @@ function getCacheJson_(key) {
 }
 
 function putCacheJson_(key, value, seconds) {
-  getScriptCache_().put(key, JSON.stringify(value), seconds || CACHE_TTL_SECONDS);
+  try {
+    const raw = JSON.stringify(value);
+    if (raw.length > 90000) return;
+    getScriptCache_().put(key, raw, seconds || CACHE_TTL_SECONDS);
+  } catch (error) {
+    // CacheService is a best-effort optimization. Request handling must continue without it.
+  }
 }
 
 function removeCache_(key) {
   getScriptCache_().remove(key);
 }
 
+function getCachedJson_(key, fallback, seconds) {
+  const cached = getCacheJson_(key);
+  if (cached !== null) return cached;
+  const value = fallback();
+  putCacheJson_(key, value, seconds);
+  return value;
+}
+
 function clearUserRelatedCache_() {
   const cache = getScriptCache_();
   cache.remove(CACHE_KEYS.USERS);
   cache.remove(CACHE_KEYS.ADMINS);
+}
+
+function clearReservationRelatedCache_() {
+  removeCache_(CACHE_KEYS.RESERVATIONS);
+}
+
+function clearAllDataCaches_() {
+  const cache = getScriptCache_();
+  cache.remove(CACHE_KEYS.USERS);
+  cache.remove(CACHE_KEYS.ADMINS);
+  cache.remove(CACHE_KEYS.RESERVATIONS);
 }
 
 function now_() {
@@ -120,6 +147,22 @@ function getReservationRow_(row) {
   if (!row || row < 2 || row > sheet.getLastRow()) throw new Error('指定された予約行が不正です。');
   const values = sheet.getRange(row, 1, 1, 6).getValues()[0];
   return reservationObject_(row, values);
+}
+
+function getReservationSnapshot_() {
+  return getCachedJson_(CACHE_KEYS.RESERVATIONS, function() {
+    const sheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
+    const lastRow = sheet.getLastRow();
+    const slots = [];
+    if (lastRow >= 2) {
+      const values = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+      values.forEach(function(rowValues, index) {
+        const slot = reservationObject_(index + 2, rowValues);
+        if (slot.date && slot.time) slots.push(slot);
+      });
+    }
+    return { generatedAt: now_(), slots: slots };
+  }, RESERVATION_CACHE_TTL_SECONDS);
 }
 
 function reservationObject_(row, values) {

@@ -4,14 +4,10 @@ function syncUser_(body, requestId) {
 
 function getUserById_(userId) {
   if (!userId) return null;
-  const sheet = getSheet_(CONFIG.SHEETS.USERS);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return null;
-  const width = COL.USER.IS_ACTIVE || 5;
-  const values = sheet.getRange(2, 1, lastRow - 1, width).getValues();
-  for (let i = 0; i < values.length; i++) {
-    if (String(values[i][COL.USER.USER_ID - 1]) === String(userId)) {
-      return userObject_(i + 2, values[i]);
+  const users = listUsers_();
+  for (let i = 0; i < users.length; i++) {
+    if (String(users[i].userId) === String(userId)) {
+      return users[i];
     }
   }
   return null;
@@ -39,24 +35,38 @@ function userObject_(row, values) {
 }
 
 function listUsers_() {
-  const sheet = getSheet_(CONFIG.SHEETS.USERS);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-  const width = COL.USER.IS_ACTIVE || 5;
-  return sheet.getRange(2, 1, lastRow - 1, width).getValues().map(function(values, index) {
-    return userObject_(index + 2, values);
-  });
+  return getCachedJson_(CACHE_KEYS.USERS, function() {
+    const sheet = getSheet_(CONFIG.SHEETS.USERS);
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+    const width = COL.USER.IS_ACTIVE || 5;
+    return sheet.getRange(2, 1, lastRow - 1, width).getValues().map(function(values, index) {
+      return userObject_(index + 2, values);
+    });
+  }, CACHE_TTL_SECONDS);
 }
 
 function isAdmin_(userId) {
   if (!userId) return false;
-  const sheet = getSheet_(CONFIG.SHEETS.ADMINS);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return false;
-  const values = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
-  return values.some(function(row) {
-    return String(row[COL.ADMIN.USER_ID - 1]) === String(userId) && String(row[COL.ADMIN.ROLE - 1]).trim() === CONFIG.ADMIN_ROLE;
+  return listAdmins_().some(function(admin) {
+    return String(admin.userId) === String(userId) && String(admin.role).trim() === CONFIG.ADMIN_ROLE;
   });
+}
+
+function listAdmins_() {
+  return getCachedJson_(CACHE_KEYS.ADMINS, function() {
+    const sheet = getSheet_(CONFIG.SHEETS.ADMINS);
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+    return sheet.getRange(2, 1, lastRow - 1, 4).getValues().map(function(row) {
+      return {
+        userId: row[COL.ADMIN.USER_ID - 1] || '',
+        name: row[COL.ADMIN.NAME - 1] || '',
+        role: row[COL.ADMIN.ROLE - 1] || '',
+        memo: row[COL.ADMIN.MEMO - 1] || ''
+      };
+    });
+  }, CACHE_TTL_SECONDS);
 }
 
 function requireAdmin_(userId) {
@@ -82,8 +92,22 @@ function updateCastName_(body, requestId) {
   if (!user) throw new Error('対象ユーザーが見つかりません。');
 
   const before = Object.assign({}, user);
-  sheet.getRange(user.row, COL.USER.CAST_NAME).setValue(castName);
-  const after = getUserById_(userId);
+  const rowValues = [
+    before.userId,
+    before.displayName || '',
+    castName,
+    before.createdAt || now_(),
+    before.memo || '',
+    before.pictureUrl || '',
+    before.statusMessage || '',
+    before.role || CONFIG.DEFAULT_ROLE,
+    before.linkedEventId || '',
+    before.lastAccessAt || '',
+    before.isActive !== false
+  ];
+  sheet.getRange(user.row, 1, 1, COL.USER.IS_ACTIVE).setValues([rowValues]);
+  clearUserRelatedCache_();
+  const after = userObject_(user.row, rowValues);
   appendLog_({ action: 'updateCastName', actorId: adminUserId, actorName: adminUserId, target: 'user:' + userId, before: before, after: after, result: 'success', requestId: requestId });
   return ok_({ user: after });
 }
