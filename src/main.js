@@ -5,10 +5,12 @@ import { initializeLiff } from './liff.js';
 import { renderAdmin } from './admin.js';
 
 const app = document.getElementById('app');
+const CURRENT_USER_STORAGE_KEY = 'steelReservation.currentUser';
 
 const state = {
   loading: false,
   profile: null,
+  currentUser: null,
   user: null,
   slots: [],
   myReservations: [],
@@ -24,6 +26,23 @@ function setLoading(flag) {
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (s) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
+}
+
+function saveCurrentUser(loginResult) {
+  const currentUser = {
+    userId: loginResult.userId || loginResult.user?.userId || '',
+    displayName: loginResult.displayName || loginResult.user?.displayName || '',
+    role: loginResult.role || loginResult.user?.role || 'viewer',
+    linkedEventId: loginResult.linkedEventId || loginResult.user?.linkedEventId || '',
+    isAdmin: Boolean(loginResult.isAdmin),
+    user: loginResult.user || null,
+    savedAt: new Date().toISOString()
+  };
+  state.currentUser = currentUser;
+  state.user = loginResult.user || state.user;
+  state.isAdmin = Boolean(currentUser.isAdmin || currentUser.role === 'admin');
+  localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(currentUser));
+  return currentUser;
 }
 
 function formatTime(value) {
@@ -70,31 +89,28 @@ function availableMonths() {
   return months.sort((a, b) => Number(a) - Number(b));
 }
 
-async function syncCurrentUser(profile) {
-  const body = {
+async function loginWithLineProfile(profile) {
+  const result = await apiPost('lineLogin', {
+    action: 'lineLogin',
     userId: profile.userId,
     displayName: profile.displayName,
-    lineName: profile.displayName
-  };
+    pictureUrl: profile.pictureUrl || '',
+    statusMessage: profile.statusMessage || ''
+  });
 
-  try {
-    const result = await apiGet('syncUser', body);
-    if (result.ok) return result;
-    if (!String(result.message || '').includes('未対応のGET action')) return result;
-  } catch (error) {
-    if (!String(error.message || '').includes('未対応のGET action')) throw error;
-  }
-
-  return apiPost('syncUser', body);
+  if (!result.ok && !result.success) throw new Error(result.message || 'LINEログインに失敗しました。');
+  saveCurrentUser(result);
+  return result;
 }
 
 async function refresh() {
-  const data = await apiGet('list', { userId: state.profile.userId });
+  const userId = state.currentUser?.userId || state.profile?.userId;
+  const data = await apiGet('list', { userId });
   if (!data.ok) throw new Error(data.message || '予約一覧の取得に失敗しました。');
   state.slots = (data.openSlots || data.availableSlots || []).map((slot) => ({ ...slot, time: formatTime(slot.time) }));
   state.myReservations = (data.myReservations || []).map((slot) => ({ ...slot, time: formatTime(slot.time) }));
   state.user = data.user || state.user;
-  state.isAdmin = Boolean(data.isAdmin);
+  state.isAdmin = Boolean(data.isAdmin || state.currentUser?.isAdmin || state.currentUser?.role === 'admin');
   const months = availableMonths();
   if (state.monthFilter !== 'all' && !months.includes(state.monthFilter)) state.monthFilter = 'all';
   render();
@@ -102,7 +118,7 @@ async function refresh() {
 
 async function boot() {
   try {
-    app.innerHTML = '<div class="boot"><div class="spinner"></div><strong>撮影予約を読み込んでいます</strong><span>LINE認証と予約情報を確認中です</span></div>';
+    app.innerHTML = '<div class="boot"><div class="spinner"></div><strong>LINEログインを確認しています</strong><span>Chrome / Safari からLINE認証を行います</span></div>';
     const missing = validateConfig();
     if (missing.length) throw new Error(`${missing.join(', ')} が未設定です。src/config.js を更新してください。`);
 
@@ -110,10 +126,7 @@ async function boot() {
     if (!profile) return;
     state.profile = profile;
 
-    const synced = await syncCurrentUser(profile);
-    if (!synced.ok) throw new Error(synced.message || 'ユーザー同期に失敗しました。');
-    state.user = synced.user;
-
+    await loginWithLineProfile(profile);
     await refresh();
   } catch (error) {
     app.innerHTML = `<div class="error"><h1>読み込みエラー</h1><p>${escapeHtml(error.message)}</p><button onclick="location.reload()">再読み込み</button></div>`;
@@ -121,7 +134,7 @@ async function boot() {
 }
 
 function render() {
-  const displayName = state.user?.castName || state.profile?.displayName || 'ユーザー';
+  const displayName = state.user?.castName || state.currentUser?.displayName || state.profile?.displayName || 'ユーザー';
 
   if (state.mode === 'admin') {
     renderAdmin(app, state, { apiGet, apiPost, refresh, setMode, formatTime, formatDateLabel, escapeHtml });
@@ -258,8 +271,8 @@ function openReserveModal(row, date, time) {
   root.querySelector('[data-modal="submit"]').onclick = async () => {
     await runLocked(async () => {
       const note = root.querySelector('#note').value.trim();
-      const name = state.user?.castName || state.profile.displayName;
-      const res = await apiPost('reserve', { row, userId: state.profile.userId, name, note });
+      const name = state.user?.castName || state.currentUser?.displayName || state.profile.displayName;
+      const res = await apiPost('reserve', { row, userId: state.currentUser?.userId || state.profile.userId, name, note });
       if (!res.ok) throw new Error(res.message || '予約に失敗しました。');
       root.innerHTML = '';
       state.mode = 'mine';
@@ -280,7 +293,7 @@ function openChangeModal(row) {
     await runLocked(async () => {
       const targetRowValue = root.querySelector('#targetRow').value;
       const note = root.querySelector('#note').value.trim();
-      const res = await apiPost('update', { row, targetRow: targetRowValue ? Number(targetRowValue) : row, userId: state.profile.userId, note });
+      const res = await apiPost('update', { row, targetRow: targetRowValue ? Number(targetRowValue) : row, userId: state.currentUser?.userId || state.profile.userId, note });
       if (!res.ok) throw new Error(res.message || '変更に失敗しました。');
       root.innerHTML = '';
       await refresh();
@@ -291,7 +304,7 @@ function openChangeModal(row) {
 async function cancelReservation(row) {
   if (!confirm('この予約をキャンセルします。よろしいですか？')) return;
   await runLocked(async () => {
-    const res = await apiPost('cancel', { row, userId: state.profile.userId });
+    const res = await apiPost('cancel', { row, userId: state.currentUser?.userId || state.profile.userId });
     if (!res.ok) throw new Error(res.message || 'キャンセルに失敗しました。');
     await refresh();
   });
