@@ -4,6 +4,9 @@ function handlePost_(e) {
 
   return runWithLog_(action, body.userId || body.adminUserId || '', function(requestId) {
     switch (action) {
+      case 'lineLogin':
+        return lineLogin_(body, requestId);
+
       case 'syncUser':
         return syncUser_(body, requestId);
 
