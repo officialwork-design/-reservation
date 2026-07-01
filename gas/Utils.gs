@@ -1,6 +1,12 @@
 let __spreadsheetCache = null;
 let __sheetCache = {};
 
+const CACHE_KEYS = {
+  USERS: 'steel_reservation_users_v1',
+  ADMINS: 'steel_reservation_admins_v1'
+};
+const CACHE_TTL_SECONDS = 120;
+
 function getSpreadsheet_() {
   if (!__spreadsheetCache) {
     __spreadsheetCache = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
@@ -20,6 +26,35 @@ function getSheet_(name) {
 function clearRuntimeCache_() {
   __spreadsheetCache = null;
   __sheetCache = {};
+}
+
+function getScriptCache_() {
+  return CacheService.getScriptCache();
+}
+
+function getCacheJson_(key) {
+  const raw = getScriptCache_().get(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    getScriptCache_().remove(key);
+    return null;
+  }
+}
+
+function putCacheJson_(key, value, seconds) {
+  getScriptCache_().put(key, JSON.stringify(value), seconds || CACHE_TTL_SECONDS);
+}
+
+function removeCache_(key) {
+  getScriptCache_().remove(key);
+}
+
+function clearUserRelatedCache_() {
+  const cache = getScriptCache_();
+  cache.remove(CACHE_KEYS.USERS);
+  cache.remove(CACHE_KEYS.ADMINS);
 }
 
 function now_() {
