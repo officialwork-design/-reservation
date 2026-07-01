@@ -6,7 +6,10 @@ export async function initializeLiff() {
     throw new Error('LIFF_ID が未設定です。src/config.js を更新してください。');
   }
 
-  await liff.init({ liffId: CONFIG.LIFF_ID });
+  await liff.init({
+    liffId: CONFIG.LIFF_ID,
+    withLoginOnExternalBrowser: true
+  });
 
   if (!liff.isLoggedIn()) {
     liff.login({ redirectUri: window.location.href });
@@ -17,7 +20,9 @@ export async function initializeLiff() {
   return {
     userId: profile.userId,
     displayName: profile.displayName,
-    pictureUrl: profile.pictureUrl || ''
+    pictureUrl: profile.pictureUrl || '',
+    statusMessage: profile.statusMessage || '',
+    isInClient: liff.isInClient()
   };
 }
 
