@@ -29,6 +29,7 @@ export async function renderAdmin(app, state, deps) {
     escapeHtml = fallbackEscapeHtml
   } = deps;
 
+  const adminUserId = state.currentUser?.userId || state.profile?.userId;
   let adminCache = { summary: null, users: [], reservations: [] };
 
   app.innerHTML = `
@@ -54,7 +55,8 @@ export async function renderAdmin(app, state, deps) {
 
   async function loadAdminData() {
     try {
-      const bundle = await apiGet('adminBundle', { userId: state.profile.userId });
+      if (!adminUserId) throw new Error('ログインユーザーIDが取得できません。再ログインしてください。');
+      const bundle = await apiGet('adminBundle', { userId: adminUserId });
       if (!bundle.ok) throw new Error(bundle.message || '管理データ取得に失敗しました。');
 
       adminCache = {
@@ -113,7 +115,7 @@ export async function renderAdmin(app, state, deps) {
   function bindAdminEvents() {
     app.querySelector('#create-slots').onclick = async () => {
       const body = {
-        adminUserId: state.profile.userId,
+        adminUserId,
         date: app.querySelector('#slot-date').value,
         startTime: app.querySelector('#slot-start').value,
         endTime: app.querySelector('#slot-end').value,
@@ -131,7 +133,7 @@ export async function renderAdmin(app, state, deps) {
         const displayName = app.querySelector(`[data-display-input="${CSS.escape(userId)}"]`).value.trim();
         const castName = app.querySelector(`[data-cast-input="${CSS.escape(userId)}"]`).value.trim();
         const memo = app.querySelector(`[data-memo-input="${CSS.escape(userId)}"]`)?.value.trim() || '';
-        const res = await apiPost('adminUpdateUser', { adminUserId: state.profile.userId, userId, displayName, castName, memo });
+        const res = await apiPost('adminUpdateUser', { adminUserId, userId, displayName, castName, memo });
         if (!res.ok) return alert(res.message || 'ユーザー更新に失敗しました。');
         alert('ユーザー情報を更新しました。');
         await loadAdminData();
@@ -143,7 +145,7 @@ export async function renderAdmin(app, state, deps) {
         const userId = button.dataset.userId;
         const name = button.dataset.name || 'このユーザー';
         if (!confirm(`${name} を削除します。予約が残っている場合は削除できません。`)) return;
-        const res = await apiPost('adminDeleteUser', { adminUserId: state.profile.userId, userId });
+        const res = await apiPost('adminDeleteUser', { adminUserId, userId });
         if (!res.ok) return alert(res.message || 'ユーザー削除に失敗しました。');
         alert('ユーザーを削除しました。');
         await loadAdminData();
@@ -162,7 +164,7 @@ export async function renderAdmin(app, state, deps) {
       button.onclick = async () => {
         const row = Number(button.dataset.row);
         if (!confirm('この予約を削除して空き枠に戻します。')) return;
-        const res = await apiPost('adminDeleteReservation', { adminUserId: state.profile.userId, row });
+        const res = await apiPost('adminDeleteReservation', { adminUserId, row });
         if (!res.ok) return alert(res.message || '予約削除に失敗しました。');
         alert('予約を削除しました。');
         await loadAdminData();
@@ -173,7 +175,7 @@ export async function renderAdmin(app, state, deps) {
       const rows = app.querySelector('#delete-rows').value.split(',').map(v => Number(v.trim())).filter(Boolean);
       if (!rows.length) return alert('削除する行番号を入力してください。');
       if (!confirm(`${rows.length}件の空き枠削除を実行します。`)) return;
-      const res = await apiPost('deleteSlots', { adminUserId: state.profile.userId, rows });
+      const res = await apiPost('deleteSlots', { adminUserId, rows });
       if (!res.ok) return alert(res.message || '削除に失敗しました。');
       alert(`削除:${res.deletedRows.length} / 拒否:${res.rejectedRows.length}`);
       await loadAdminData();
@@ -200,7 +202,7 @@ export async function renderAdmin(app, state, deps) {
     root.querySelector('[data-modal-save]').onclick = async () => {
       const name = root.querySelector('#reservation-name').value.trim();
       const note = root.querySelector('#reservation-note').value.trim();
-      const res = await apiPost('adminUpdateReservation', { adminUserId: state.profile.userId, row: item.row, name, note });
+      const res = await apiPost('adminUpdateReservation', { adminUserId, row: item.row, name, note });
       if (!res.ok) return alert(res.message || '予約更新に失敗しました。');
       root.innerHTML = '';
       alert('予約を更新しました。');
@@ -220,6 +222,8 @@ export async function renderAdmin(app, state, deps) {
             <div class="admin-card-title">${escapeHtml(title)}</div>
             <div class="admin-card-meta">LINE ID: ${escapeHtml(user.userId || '-')}</div>
             <div class="admin-card-meta">登録: ${escapeHtml(user.createdAt || '-')}</div>
+            <div class="admin-card-meta">最終アクセス: ${escapeHtml(user.lastAccessAt || '-')}</div>
+            <div class="admin-card-meta">権限: ${escapeHtml(user.role || 'viewer')}</div>
           </div>
           <span class="admin-pill">User</span>
         </div>
