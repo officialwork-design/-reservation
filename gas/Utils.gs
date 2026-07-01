@@ -1,11 +1,25 @@
+let __spreadsheetCache = null;
+let __sheetCache = {};
+
 function getSpreadsheet_() {
-  return SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  if (!__spreadsheetCache) {
+    __spreadsheetCache = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  }
+  return __spreadsheetCache;
 }
 
 function getSheet_(name) {
-  const sheet = getSpreadsheet_().getSheetByName(name);
-  if (!sheet) throw new Error(name + ' シートが見つかりません。');
-  return sheet;
+  if (!__sheetCache[name]) {
+    const sheet = getSpreadsheet_().getSheetByName(name);
+    if (!sheet) throw new Error(name + ' シートが見つかりません。');
+    __sheetCache[name] = sheet;
+  }
+  return __sheetCache[name];
+}
+
+function clearRuntimeCache_() {
+  __spreadsheetCache = null;
+  __sheetCache = {};
 }
 
 function now_() {
