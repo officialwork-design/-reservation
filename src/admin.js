@@ -31,6 +31,8 @@ export function renderAdmin(app, state, deps) {
 
   const adminUserId = state.currentUser?.userId || state.profile?.userId;
   const filters = { users: '', reservations: '', openSlots: '' };
+  const planState = { date: '' };
+  const NOTE_OPTIONS = ['撮影', '再撮影', 'プロフィール撮影', '宣材撮影', '動画撮影', 'その他'];
   let adminCache = { summary: null, users: [], reservations: [], openSlots: [] };
 
   app.innerHTML = `
@@ -40,7 +42,7 @@ export function renderAdmin(app, state, deps) {
         <div>
           <p class="eyebrow">Admin Console</p>
           <h1>管理画面</h1>
-          <p>枠作成・ユーザー管理・予約確認</p>
+          <p>枠作成・予定作成・ユーザー管理・予約確認</p>
         </div>
       </div>
       <div class="hero-meta"><div><span>管理</span><small>admin</small></div></div>
@@ -75,6 +77,8 @@ export function renderAdmin(app, state, deps) {
       reservations: bundle.reservations || [],
       openSlots: bundle.openSlots || []
     };
+    const dates = availableOpenDates();
+    if (!dates.includes(planState.date)) planState.date = dates[0] || '';
   }
 
   function renderAdminSkeleton() {
@@ -134,6 +138,8 @@ export function renderAdmin(app, state, deps) {
         <button id="create-slots">予約枠作成</button>
       </section>
 
+      ${renderPlanCreateCard()}
+
       <section class="panel">
         <div class="admin-section-title"><h2>ユーザー管理</h2><span class="admin-pill">${users.length}/${adminCache.users.length}名</span></div>
         <input class="filter-input" data-filter="users" value="${escapeHtml(filters.users)}" placeholder="ユーザー検索">
@@ -159,8 +165,67 @@ export function renderAdmin(app, state, deps) {
     restoreFilterFocus(focusFilter);
   }
 
+  function renderPlanCreateCard() {
+    const activeUsers = adminCache.users.filter((user) => user && user.userId && user.isActive !== false);
+    const dates = availableOpenDates();
+    if (!dates.includes(planState.date)) planState.date = dates[0] || '';
+    const times = availableTimesForDate(planState.date);
+
+    return `
+      <section class="panel">
+        <div class="admin-section-title">
+          <h2>予定作成</h2>
+          <span class="admin-pill">Direct</span>
+        </div>
+        <p class="muted">既存の空き枠に、管理者がユーザーを指定して予定を直接作成します。</p>
+        <div class="form-grid">
+          <label>ユーザー<select id="plan-user">${activeUsers.length ? activeUsers.map(renderUserOption).join('') : '<option value="">登録ユーザーなし</option>'}</select></label>
+          <label>日付<select id="plan-date">${dates.length ? dates.map((date) => `<option value="${escapeHtml(date)}" ${date === planState.date ? 'selected' : ''}>${escapeHtml(formatDateLabel(date))}</option>`).join('') : '<option value="">空き日付なし</option>'}</select></label>
+          <label>時間<select id="plan-time">${times.length ? times.map((slot) => `<option value="${escapeHtml(formatTime(slot.time))}">${escapeHtml(formatTime(slot.time))}</option>`).join('') : '<option value="">空き時間なし</option>'}</select></label>
+          <label>備考<select id="plan-note">${NOTE_OPTIONS.map((note) => `<option value="${escapeHtml(note)}">${escapeHtml(note)}</option>`).join('')}</select></label>
+        </div>
+        <button id="create-reservation" ${!activeUsers.length || !dates.length || !times.length ? 'disabled' : ''}>予定作成</button>
+      </section>
+    `;
+  }
+
+  function renderUserOption(user) {
+    const label = user.castName || user.displayName || user.userId;
+    const meta = user.castName && user.displayName ? ` / ${user.displayName}` : '';
+    return `<option value="${escapeHtml(user.userId)}">${escapeHtml(label + meta)}</option>`;
+  }
+
+  function availableOpenDates() {
+    return Array.from(new Set(adminCache.openSlots.map((slot) => slot.date).filter(Boolean))).sort((a, b) => String(a).localeCompare(String(b)));
+  }
+
+  function availableTimesForDate(date) {
+    if (!date) return [];
+    return adminCache.openSlots
+      .filter((slot) => String(slot.date) === String(date))
+      .sort((a, b) => String(formatTime(a.time)).localeCompare(String(formatTime(b.time))));
+  }
+
   function bindAdminEvents() {
     app.querySelector('#reload-admin').onclick = loadAdminData;
+
+    app.querySelector('#plan-date')?.addEventListener('change', (event) => {
+      planState.date = event.target.value;
+      renderAdminContent();
+    });
+
+    app.querySelector('#create-reservation')?.addEventListener('click', async () => {
+      await runAdminAction(async () => {
+        const userId = app.querySelector('#plan-user')?.value || '';
+        const date = app.querySelector('#plan-date')?.value || '';
+        const time = app.querySelector('#plan-time')?.value || '';
+        const note = app.querySelector('#plan-note')?.value || '';
+        const res = await apiPost('adminCreateReservation', { adminUserId, userId, date, time, note });
+        if (!res.ok) return alert(res.message || '予定作成に失敗しました。');
+        alert('予定を作成しました。');
+        handleAdminMutationResponse(res);
+      });
+    });
 
     app.querySelectorAll('[data-filter]').forEach((input) => {
       input.addEventListener('input', () => {
