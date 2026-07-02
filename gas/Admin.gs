@@ -94,6 +94,42 @@ function createSlots_(body, requestId) {
   });
 }
 
+function adminCreateReservation_(body, requestId) {
+  return withReservationLock_(function() {
+    const adminUserId = String(required_(body.adminUserId, 'adminUserId')).trim();
+    const userId = String(required_(body.userId, 'userId')).trim();
+    const date = normalizeDate_(required_(body.date, 'date'));
+    const time = normalizeTime_(required_(body.time, 'time'));
+    const note = String(required_(body.note, 'note')).trim();
+    requireAdmin_(adminUserId);
+
+    const user = getUserById_(userId);
+    if (!user) throw new Error('対象ユーザーが見つかりません。');
+    if (user.isActive === false) throw new Error('対象ユーザーは無効化されています。');
+
+    const name = String(user.castName || user.displayName || '').trim();
+    if (!name) throw new Error('対象ユーザーの表示名またはキャスト名が未設定です。');
+
+    const sheet = getSheet_(CONFIG.SHEETS.RESERVATIONS);
+    const snapshot = getReservationSnapshot_();
+    const target = snapshot.slots.find(function(slot) {
+      return normalizeDate_(slot.date) === date && normalizeTime_(slot.time) === time;
+    });
+
+    if (!target) throw new Error('指定した日付と時間の空き枠が見つかりません。');
+    const before = getReservationRow_(target.row);
+    if (isReserved_(before)) throw new Error('指定した枠は既に予約済みです。');
+
+    const updatedAt = now_();
+    sheet.getRange(target.row, COL.RESERVATION.NAME, 1, 4).setValues([[name, note, userId, updatedAt]]);
+    clearReservationRelatedCache_();
+
+    const after = getReservationRow_(target.row);
+    appendLog_({ action: 'adminCreateReservation', actorId: adminUserId, actorName: adminUserId, target: 'row:' + target.row, before: before, after: after, result: 'success', requestId: requestId });
+    return ok_(Object.assign({ reservation: after }, buildAdminBundleData_(adminUserId, true)));
+  });
+}
+
 function deleteSlots_(body, requestId) {
   return withReservationLock_(function() {
     const adminUserId = String(required_(body.adminUserId, 'adminUserId')).trim();
