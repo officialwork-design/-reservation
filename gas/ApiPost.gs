@@ -28,6 +28,9 @@ function handlePost_(e) {
       case 'createSlots':
         return createSlots_(body, requestId);
 
+      case 'adminCreateReservation':
+        return adminCreateReservation_(body, requestId);
+
       case 'deleteSlots':
         return deleteSlots_(body, requestId);
 
