@@ -32,7 +32,6 @@ export function renderAdmin(app, state, deps) {
   const adminUserId = state.currentUser?.userId || state.profile?.userId;
   const filters = { users: '', reservations: '', openSlots: '' };
   const planState = { date: '' };
-  const NOTE_OPTIONS = ['撮影', '再撮影', 'プロフィール撮影', '宣材撮影', '動画撮影', 'その他'];
   let adminCache = { summary: null, users: [], reservations: [], openSlots: [] };
 
   app.innerHTML = `
@@ -182,7 +181,7 @@ export function renderAdmin(app, state, deps) {
           <label>ユーザー<select id="plan-user">${activeUsers.length ? activeUsers.map(renderUserOption).join('') : '<option value="">登録ユーザーなし</option>'}</select></label>
           <label>日付<select id="plan-date">${dates.length ? dates.map((date) => `<option value="${escapeHtml(date)}" ${date === planState.date ? 'selected' : ''}>${escapeHtml(formatDateLabel(date))}</option>`).join('') : '<option value="">空き日付なし</option>'}</select></label>
           <label>時間<select id="plan-time">${times.length ? times.map((slot) => `<option value="${escapeHtml(formatTime(slot.time))}">${escapeHtml(formatTime(slot.time))}</option>`).join('') : '<option value="">空き時間なし</option>'}</select></label>
-          <label>備考<select id="plan-note">${NOTE_OPTIONS.map((note) => `<option value="${escapeHtml(note)}">${escapeHtml(note)}</option>`).join('')}</select></label>
+          <label>備考<input id="plan-note" type="text" placeholder="備考を入力"></label>
         </div>
         <button id="create-reservation" ${!activeUsers.length || !dates.length || !times.length ? 'disabled' : ''}>予定作成</button>
       </section>
@@ -219,7 +218,7 @@ export function renderAdmin(app, state, deps) {
         const userId = app.querySelector('#plan-user')?.value || '';
         const date = app.querySelector('#plan-date')?.value || '';
         const time = app.querySelector('#plan-time')?.value || '';
-        const note = app.querySelector('#plan-note')?.value || '';
+        const note = app.querySelector('#plan-note')?.value.trim() || '';
         const res = await apiPost('adminCreateReservation', { adminUserId, userId, date, time, note });
         if (!res.ok) return alert(res.message || '予定作成に失敗しました。');
         alert('予定を作成しました。');
